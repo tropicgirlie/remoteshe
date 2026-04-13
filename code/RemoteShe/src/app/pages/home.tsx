@@ -2,11 +2,10 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router";
 import {
   Search, Globe, Baby, Heart, ArrowRight, CheckCircle2,
-  MapPin, Briefcase, Clock, ExternalLink,
-  Users, Bell, Star, DollarSign,
+  MapPin, Clock, ExternalLink,
+  Users, Bell, Star, DollarSign, Home, Leaf, ShieldCheck,
 } from "lucide-react";
-import { companiesAPI, statsAPI, fetchJobsFromTable } from "../lib/api";
-import { Company } from "../lib/types";
+import { fetchJobs } from "../../lib/fetchJobs";
 import { JobAlertModal } from "../components/job-alert-modal";
 import { CompanyLogo } from "../components/company-logo";
 
@@ -14,11 +13,26 @@ import { CompanyLogo } from "../components/company-logo";
 const QUICK_FILTERS = [
   { label: "Fully Remote", icon: Globe },
   { label: "20+ wk Maternity", icon: Baby },
-  { label: "Fertility / IVF", icon: Heart },
-  { label: "Childcare Support", icon: Baby },
+  { label: "IVF / Fertility", icon: Heart },
+  { label: "Childcare Support", icon: Home },
+  { label: "Caregiver Leave", icon: Leaf },
   { label: "Women-led 40%+", icon: Users },
+  { label: "Paternity Leave", icon: Baby },
 ];
 
+// ── What we look for ───────────────────────────────────────────────────────────
+const CARE_LEGEND = [
+  { icon: <Baby className="w-3.5 h-3.5 text-pink-500" />, label: "20+ weeks maternity leave", cls: "bg-pink-50" },
+  { icon: <Baby className="w-3.5 h-3.5 text-sky-500" />, label: "Paternity / shared parental leave", cls: "bg-sky-50" },
+  { icon: <Heart className="w-3.5 h-3.5 text-rose-500" />, label: "IVF & fertility coverage", cls: "bg-rose-50" },
+  { icon: <ShieldCheck className="w-3.5 h-3.5 text-fuchsia-500" />, label: "Broader fertility support", cls: "bg-fuchsia-50" },
+  { icon: <Home className="w-3.5 h-3.5 text-purple-500" />, label: "Childcare support or subsidy", cls: "bg-purple-50" },
+  { icon: <Leaf className="w-3.5 h-3.5 text-teal-500" />, label: "Caregiver leave (family care)", cls: "bg-teal-50" },
+  { icon: <Globe className="w-3.5 h-3.5 text-blue-500" />, label: "Remote-first flexibility", cls: "bg-blue-50" },
+  { icon: <Users className="w-3.5 h-3.5 text-green-500" />, label: "Women in leadership 30%+", cls: "bg-green-50" },
+];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function timeAgo(dateStr?: string) {
   if (!dateStr) return "Recently";
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -30,8 +44,6 @@ function timeAgo(dateStr?: string) {
   return `${Math.floor(days / 30)}mo ago`;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
 function formatSalary(min?: number | null, max?: number | null): string | null {
   if (!min && !max) return null;
   const fmt = (n: number) => `$${Math.round(n / 1000)}k`;
@@ -42,16 +54,11 @@ function formatSalary(min?: number | null, max?: number | null): string | null {
 }
 
 function toTitleCase(str: string): string {
-  return str
-    .toLowerCase()
-    .split(' ')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
+  return str.toLowerCase().split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
 
 function isUUID(str: string): boolean {
-  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  return uuidPattern.test(str);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
 }
 
 function getCompanyName(companies: any, companyId: string | null | undefined): string {
@@ -66,11 +73,17 @@ function scoreTier(score: number): { label: string; color: string; bg: string; b
   return { label: "Verified", color: "text-gray-600", bg: "bg-gray-50", border: "border-gray-200" };
 }
 
-function BenefitPill({ children, variant = "pink" }: { children: React.ReactNode; variant?: "pink" | "rose" | "purple" }) {
-  const styles = {
-    pink: "bg-pink-50 text-pink-700 border-pink-100",
-    rose: "bg-rose-50 text-rose-700 border-rose-100",
-    purple: "bg-purple-50 text-purple-700 border-purple-100",
+type PillVariant = "pink" | "rose" | "purple" | "sky" | "fuchsia" | "teal" | "green";
+
+function BenefitPill({ children, variant = "pink" }: { children: React.ReactNode; variant?: PillVariant }) {
+  const styles: Record<PillVariant, string> = {
+    pink:    "bg-pink-50 text-pink-700 border-pink-100",
+    rose:    "bg-rose-50 text-rose-700 border-rose-100",
+    purple:  "bg-purple-50 text-purple-700 border-purple-100",
+    sky:     "bg-sky-50 text-sky-700 border-sky-100",
+    fuchsia: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-100",
+    teal:    "bg-teal-50 text-teal-700 border-teal-100",
+    green:   "bg-green-50 text-green-700 border-green-100",
   };
   return (
     <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${styles[variant]}`}>
@@ -94,25 +107,33 @@ function ScoreBar({ score }: { score: number }) {
 
 // ── Job Card ──────────────────────────────────────────────────────────────────
 function JobCard({ job }: { job: any }) {
-  const hasCompanyData = job.companies != null;
-  const companyName = getCompanyName(job.companies, job.company_id);
-  const companyWebsite = job.companies?.website;
-  const score = job.companies?.carefolio_score || job.carefolio_score || 0;
+  const co = job.companies;
+  const hasCompanyData = co != null;
+  const companyName = getCompanyName(co, job.company_id);
+  const score = co?.carefolio_score || job.carefolio_score || 0;
   const tier = scoreTier(score);
-  const remoteLabel = job.remote_type || "";
   const salary = formatSalary(job.salary_min, job.salary_max);
-  const maternityWeeks = job.companies?.maternity_leave_weeks || job.maternity_leave_weeks;
-  const ivfCovered = job.companies?.ivf_coverage ?? job.ivf_coverage;
-  const childcareSupport = job.companies?.childcare_support ?? job.childcare_support;
-  const hasBenefits = hasCompanyData && (maternityWeeks || ivfCovered || childcareSupport);
-  const locationDisplay = job.location || "Location not specified";
+
+  // All perks
+  const maternityWeeks   = co?.maternity_leave_weeks;
+  const paternityWeeks   = co?.paternity_leave_weeks;
+  const ivfCovered       = co?.ivf_coverage;
+  const fertilitySupport = co?.fertility_support && !ivfCovered; // avoid double-show
+  const childcare        = co?.childcare_support;
+  const caregiverLeave   = co?.caregiver_leave;
+  const womenLead        = co?.women_leadership_percent;
+
+  const hasBenefits = hasCompanyData && (
+    maternityWeeks || paternityWeeks || ivfCovered || fertilitySupport ||
+    childcare || caregiverLeave || (womenLead && womenLead >= 40)
+  );
 
   return (
     <div className="bg-white border border-gray-200 rounded-2xl p-5 cursor-default hover:shadow-md hover:border-[#5B39C8]/25 transition-all group">
       <div className="flex items-start gap-4">
-        <CompanyLogo name={companyName} website={companyWebsite} size={48} />
+        <CompanyLogo name={companyName} website={co?.website} size={48} />
         <div className="flex-1 min-w-0">
-          {/* Top row: company name + tier badge */}
+          {/* Top row */}
           <div className="flex items-start justify-between gap-2 mb-0.5">
             <span className="text-xs text-gray-500 font-medium truncate">{companyName}</span>
             {hasCompanyData && score > 0 && (
@@ -122,18 +143,16 @@ function JobCard({ job }: { job: any }) {
               </span>
             )}
           </div>
+
           <h3 className="text-[15px] font-bold text-gray-900 leading-snug mb-1 group-hover:text-[#5B39C8] transition-colors">
             {job.title}
           </h3>
+
           {hasCompanyData && score > 0 && <ScoreBar score={score} />}
+
           <div className="flex flex-wrap items-center gap-3 mb-2">
-            {remoteLabel && (
-              <span className="flex items-center gap-1 text-[12px] text-gray-500">
-                <MapPin className="w-3 h-3 text-gray-400" />{remoteLabel}
-              </span>
-            )}
             <span className="flex items-center gap-1 text-[12px] text-gray-500">
-              <Globe className="w-3 h-3 text-gray-400" />{locationDisplay}
+              <MapPin className="w-3 h-3 text-gray-400" />{job.remote_type || "Remote"}
             </span>
             {salary && (
               <span className="flex items-center gap-1 text-[12px] text-gray-500 font-medium">
@@ -144,6 +163,7 @@ function JobCard({ job }: { job: any }) {
               <Clock className="w-3 h-3" />{timeAgo(job.posted_date)}
             </span>
           </div>
+
           {hasBenefits && (
             <div className="flex flex-wrap gap-1.5 mb-2">
               {maternityWeeks && (
@@ -151,20 +171,40 @@ function JobCard({ job }: { job: any }) {
                   <Baby className="w-2.5 h-2.5" />{maternityWeeks}w maternity
                 </BenefitPill>
               )}
+              {paternityWeeks && (
+                <BenefitPill variant="sky">
+                  <Baby className="w-2.5 h-2.5" />{paternityWeeks}w paternity
+                </BenefitPill>
+              )}
               {ivfCovered && (
                 <BenefitPill variant="rose">
                   <Heart className="w-2.5 h-2.5" />IVF covered
                 </BenefitPill>
               )}
-              {childcareSupport && (
+              {fertilitySupport && (
+                <BenefitPill variant="fuchsia">
+                  <ShieldCheck className="w-2.5 h-2.5" />Fertility support
+                </BenefitPill>
+              )}
+              {childcare && (
                 <BenefitPill variant="purple">
-                  <CheckCircle2 className="w-2.5 h-2.5" />Childcare
+                  <Home className="w-2.5 h-2.5" />Childcare
+                </BenefitPill>
+              )}
+              {caregiverLeave && (
+                <BenefitPill variant="teal">
+                  <Leaf className="w-2.5 h-2.5" />Caregiver leave
+                </BenefitPill>
+              )}
+              {womenLead && womenLead >= 40 && (
+                <BenefitPill variant="green">
+                  <Users className="w-2.5 h-2.5" />{womenLead}% women leaders
                 </BenefitPill>
               )}
             </div>
           )}
         </div>
-        {/* Apply button */}
+
         {job.job_url && (
           <div className="flex-shrink-0 hidden sm:flex flex-col items-end gap-2 ml-2">
             <a
@@ -186,58 +226,41 @@ function JobCard({ job }: { job: any }) {
 export function Home() {
   const navigate = useNavigate();
   const [jobs, setJobs] = useState<any[]>([]);
-  const [companies, setCompanies] = useState<Company[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [loadingJobs, setLoadingJobs] = useState(true);
-  const [loadingCompanies, setLoadingCompanies] = useState(true);
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
-  const [stats, setStats] = useState<{
-    company_count: number;
-    job_count: number;
-    subscriber_count: number;
-    top_score: number;
-    best_maternity_weeks: number;
-  } | null>(null);
   const [alertModalOpen, setAlertModalOpen] = useState(false);
   const [alertModalEmail, setAlertModalEmail] = useState("");
   const [bannerEmail, setBannerEmail] = useState("");
 
   useEffect(() => {
-    // Pull first 8 jobs directly from the SQL jobs table
-    fetchJobsFromTable()
-      .then((data: any[]) => setJobs(data.slice(0, 8)))
+    fetchJobs()
+      .then((data: any[]) => setJobs(data.slice(0, 12)))
       .catch((err: unknown) => console.error("Failed to load jobs:", err))
       .finally(() => setLoadingJobs(false));
-
-    companiesAPI.getAll()
-      .then((data: Company[]) => setCompanies(data.slice(0, 10)))
-      .catch((err: unknown) => console.error("Failed to load companies:", err))
-      .finally(() => setLoadingCompanies(false));
-
-    statsAPI.get()
-      .then(setStats)
-      .catch(() => null);
   }, []);
+
+  // Derive stats + companies from loaded jobs
+  const uniqueCompanies = jobs.reduce((acc: any[], job) => {
+    if (job.companies && !acc.find((c: any) => c.id === job.companies.id)) {
+      acc.push(job.companies);
+    }
+    return acc;
+  }, []).sort((a: any, b: any) => (b.carefolio_score ?? 0) - (a.carefolio_score ?? 0));
+
+  const topScore = jobs.reduce((max, j) => Math.max(max, j.companies?.carefolio_score ?? 0), 0);
+  const bestMaternity = jobs.reduce((max, j) => Math.max(max, j.companies?.maternity_leave_weeks ?? 0), 0);
+
+  const heroStats = [
+    { value: uniqueCompanies.length ? `${uniqueCompanies.length}` : "—", label: "Care-Verified Companies" },
+    { value: topScore ? `${topScore}` : "—", label: "Top Carefolio Score" },
+    { value: bestMaternity ? `${bestMaternity} wks` : "—", label: "Best Maternity Leave" },
+  ];
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     navigate(`/jobs?search=${encodeURIComponent(searchQuery)}`);
   };
-
-  const heroStats = [
-    {
-      value: stats?.company_count ? `${stats.company_count}` : "—",
-      label: "Care-Verified Companies",
-    },
-    {
-      value: stats?.top_score ? `${stats.top_score}` : "—",
-      label: "Top Carefolio Score",
-    },
-    {
-      value: stats?.best_maternity_weeks ? `${stats.best_maternity_weeks} wks` : "—",
-      label: "Best Maternity Leave",
-    },
-  ];
 
   return (
     <div className="bg-[#F7F7FB] min-h-screen">
@@ -255,7 +278,7 @@ export function Home() {
                 <span className="italic text-[#5B39C8]">designed for real life.</span>
               </h1>
               <p className="text-[15px] text-gray-500 leading-relaxed mb-7">
-                Every role is at a company scored for maternity leave, fertility benefits, childcare support, and flexible work.
+                Every role is at a company scored for maternity leave, fertility benefits, childcare support, caregiver leave, and flexible work — so you can grow your career without sacrificing care.
               </p>
               <form onSubmit={handleSearch}>
                 <div className="flex items-center bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
@@ -353,19 +376,12 @@ export function Home() {
                 ))
               ) : jobs.length === 0 ? (
                 <div className="bg-white border border-dashed border-gray-200 rounded-2xl p-12 text-center">
-                  <Briefcase className="w-10 h-10 text-gray-200 mx-auto mb-3" />
+                  <CheckCircle2 className="w-10 h-10 text-gray-200 mx-auto mb-3" />
                   <p className="text-gray-500 font-semibold mb-1">More jobs coming soon — check back Sunday.</p>
-                  <p className="text-gray-400 text-sm">
-                    New roles from care-verified companies are synced weekly.
-                  </p>
+                  <p className="text-gray-400 text-sm">New roles from care-verified companies are synced weekly.</p>
                 </div>
               ) : (
-                jobs.map(job => (
-                  <JobCard
-                    key={job.id}
-                    job={job}
-                  />
-                ))
+                jobs.map(job => <JobCard key={job.id} job={job} />)
               )}
             </div>
 
@@ -374,7 +390,7 @@ export function Home() {
                 onClick={() => navigate("/jobs")}
                 className="mt-4 w-full py-3 bg-white border border-gray-200 rounded-xl text-sm font-semibold text-gray-600 hover:border-[#5B39C8]/30 hover:text-[#5B39C8] transition-colors"
               >
-                Browse all {stats?.job_count ? `${stats.job_count} jobs` : "jobs"} →
+                Browse all jobs →
               </button>
             )}
           </div>
@@ -391,30 +407,24 @@ export function Home() {
                 </button>
               </div>
               <div className="space-y-2.5">
-                {loadingCompanies ? (
+                {loadingJobs ? (
                   Array.from({ length: 4 }).map((_, i) => (
                     <div key={i} className="h-12 rounded-xl bg-gray-100 animate-pulse" />
                   ))
                 ) : (
-                  companies.slice(0, 6).map(company => {
+                  uniqueCompanies.slice(0, 6).map((company: any) => {
                     const score = company.carefolio_score;
                     const isGold = (score || 0) >= 90;
                     return (
-                      <button
-                        key={company.id}
-                        onClick={() => navigate(`/company/${company.id}`)}
-                        className="flex items-center gap-3 w-full text-left hover:bg-gray-50 rounded-xl px-2 py-1.5 transition-colors group"
-                      >
+                      <div key={company.id} className="flex items-center gap-3 rounded-xl px-2 py-1.5">
                         <CompanyLogo name={company.name} website={company.website} size={32} />
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-gray-800 truncate group-hover:text-[#5B39C8] transition-colors leading-tight">
-                            {company.name}
-                          </p>
+                          <p className="text-sm font-semibold text-gray-800 truncate leading-tight">{company.name}</p>
                           <p className={`text-[10px] font-bold ${isGold ? "text-amber-600" : "text-purple-500"}`}>
                             {score} · {isGold ? "Gold Tier" : "Rising Star"}
                           </p>
                         </div>
-                      </button>
+                      </div>
                     );
                   })
                 )}
@@ -425,13 +435,7 @@ export function Home() {
             <div className="bg-white border border-gray-200 rounded-2xl p-5">
               <h3 className="text-[14px] font-bold text-gray-900 mb-3">What We Look For</h3>
               <ul className="space-y-2.5">
-                {[
-                  { icon: <Baby className="w-3.5 h-3.5 text-pink-500" />, label: "20+ weeks maternity", cls: "bg-pink-50" },
-                  { icon: <Heart className="w-3.5 h-3.5 text-rose-500" />, label: "IVF / Fertility coverage", cls: "bg-rose-50" },
-                  { icon: <CheckCircle2 className="w-3.5 h-3.5 text-purple-500" />, label: "On-site childcare", cls: "bg-purple-50" },
-                  { icon: <Globe className="w-3.5 h-3.5 text-blue-500" />, label: "Remote-first flexibility", cls: "bg-blue-50" },
-                  { icon: <Users className="w-3.5 h-3.5 text-green-500" />, label: "Women in leadership 30%+", cls: "bg-green-50" },
-                ].map(item => (
+                {CARE_LEGEND.map(item => (
                   <li key={item.label} className="flex items-center gap-2.5">
                     <div className={`w-7 h-7 rounded-full ${item.cls} flex items-center justify-center flex-shrink-0`}>
                       {item.icon}
@@ -463,45 +467,42 @@ export function Home() {
       </div>
 
       {/* ── COMPANIES STRIP ─────────────────────────────────────────────────── */}
-      <div className="max-w-7xl mx-auto px-6 lg:px-8 pb-12">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-[18px] font-bold text-gray-900">Care-First Employers</h2>
-            <p className="text-xs text-gray-400 mt-0.5">Ranked by Carefolio Score — our independent care infrastructure rating</p>
+      {uniqueCompanies.length > 0 && (
+        <div className="max-w-7xl mx-auto px-6 lg:px-8 pb-12">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-[18px] font-bold text-gray-900">Care-First Employers</h2>
+              <p className="text-xs text-gray-400 mt-0.5">Ranked by Carefolio Score — our independent care infrastructure rating</p>
+            </div>
+            <button
+              onClick={() => navigate("/companies")}
+              className="flex items-center gap-1 text-sm text-[#5B39C8] font-semibold hover:underline flex-shrink-0"
+            >
+              Browse all <ArrowRight className="w-4 h-4" />
+            </button>
           </div>
-          <button
-            onClick={() => navigate("/companies")}
-            className="flex items-center gap-1 text-sm text-[#5B39C8] font-semibold hover:underline flex-shrink-0"
-          >
-            Browse all <ArrowRight className="w-4 h-4" />
-          </button>
+          <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
+            {uniqueCompanies.map((company: any) => {
+              const score = company.carefolio_score;
+              const isGold = (score || 0) >= 90;
+              return (
+                <div
+                  key={company.id}
+                  className="flex items-center gap-2.5 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:border-[#5B39C8]/30 hover:shadow-sm transition-all text-left flex-shrink-0 w-[200px]"
+                >
+                  <CompanyLogo name={company.name} website={company.website} size={36} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-gray-900 truncate leading-tight">{company.name}</p>
+                    <p className={`text-[10px] font-bold mt-0.5 ${isGold ? "text-amber-600" : "text-purple-500"}`}>
+                      {score ?? "—"} Care Score
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
-        <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
-          {loadingCompanies
-            ? Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="w-[200px] h-[72px] rounded-xl bg-white border border-gray-200 animate-pulse flex-shrink-0" />
-              ))
-            : companies.map(company => {
-                const score = company.carefolio_score;
-                const isGold = (score || 0) >= 90;
-                return (
-                  <button
-                    key={company.id}
-                    onClick={() => navigate(`/company/${company.id}`)}
-                    className="flex items-center gap-2.5 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:border-[#5B39C8]/30 hover:shadow-sm transition-all text-left flex-shrink-0 w-[200px]"
-                  >
-                    <CompanyLogo name={company.name} website={company.website} size={36} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-900 truncate leading-tight">{company.name}</p>
-                      <p className={`text-[10px] font-bold mt-0.5 ${isGold ? "text-amber-600" : "text-purple-500"}`}>
-                        {score ?? "—"} Care Score
-                      </p>
-                    </div>
-                  </button>
-                );
-              })}
-        </div>
-      </div>
+      )}
 
       {/* ── NEWSLETTER BANNER ───────────────────────────────────────────────── */}
       <section className="bg-[#3D2496] py-16">
@@ -514,12 +515,7 @@ export function Home() {
             Never miss a care-first role.
           </h2>
           <p className="text-purple-300 text-[14px] mb-7 leading-relaxed">
-            Get alerts for new remote roles at companies that score 60+ on our Carefolio Index.
-            {stats?.subscriber_count ? (
-              <span className="block mt-1 text-purple-400 text-[12px]">
-                Join {stats.subscriber_count.toLocaleString()} subscriber{stats.subscriber_count !== 1 ? "s" : ""} already on the list.
-              </span>
-            ) : null}
+            Get alerts for new remote roles at companies that score 60+ on our Carefolio Index — maternity leave, IVF, childcare, caregiver leave, and more.
           </p>
           <form
             onSubmit={e => { e.preventDefault(); setAlertModalEmail(bannerEmail); setAlertModalOpen(true); }}
@@ -542,7 +538,6 @@ export function Home() {
         </div>
       </section>
 
-      {/* Job Alert Modal */}
       <JobAlertModal
         open={alertModalOpen}
         onClose={() => { setAlertModalOpen(false); setAlertModalEmail(""); }}
