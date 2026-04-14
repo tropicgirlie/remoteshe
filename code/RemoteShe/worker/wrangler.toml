@@ -1,0 +1,13 @@
+name = "remoteshe-worker"
+main = "src/index.ts"
+compatibility_date = "2024-09-01"
+
+kv_namespaces = [
+  { binding = "REMOTESHE", id = "f3af7363ca0d4115a6cc3f6317893fe2" }
+]
+
+[triggers]
+crons = ["0 8 * * 1"]   # Every Monday at 8am UTC — refreshes job cache weekly
+
+[vars]
+FRONTEND_URL = "https://remoteshe.netlify.app"
